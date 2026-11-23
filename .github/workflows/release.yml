@@ -1,0 +1,123 @@
+name: release
+
+# The disposable job image LaraKube Cloud runs for each server operation.
+#   push to main (image files)  → canary, with the CLI's canary build in it
+#   every Monday                → the same, so Debian security updates reach it
+#   manual, channel canary      → the same, for picking up a new CLI canary
+#   manual, channel stable      → a dated, immutable tag with the CLI's latest stable release
+# Production pins an image digest. Local and staging may follow canary.
+on:
+  push:
+    branches: [main]
+    paths: [Dockerfile, entrypoint.sh, ssh_config, scripts/**, .github/workflows/release.yml]
+  schedule:
+    - cron: '47 5 * * 1'
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'canary, or stable for a dated immutable tag'
+        type: choice
+        options: [canary, stable]
+        default: canary
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/luchavez-technologies/larakube-runner
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHANNEL: ${{ inputs.channel || 'canary' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Pick the CLI build and verify its checksums
+        id: target
+        run: |
+          if [ "$CHANNEL" = stable ]; then
+            cli="$(gh release view --repo luchavez-technologies/larakube-cli --json tagName -q .tagName)"
+            tags="$IMAGE:v$(date -u +%Y.%m.%d)"
+          else
+            cli=canary
+            tags="$IMAGE:canary,$IMAGE:canary-${GITHUB_SHA::12}"
+          fi
+          mkdir -p "$RUNNER_TEMP/cli"
+          gh release download "$cli" --repo luchavez-technologies/larakube-cli --dir "$RUNNER_TEMP/cli" --pattern larakube-linux-x64 --pattern larakube-linux-arm
+          {
+            echo "cli=$cli"
+            echo "tags=$tags"
+            echo "amd64=$(sha256sum "$RUNNER_TEMP/cli/larakube-linux-x64" | cut -d' ' -f1)"
+            echo "arm64=$(sha256sum "$RUNNER_TEMP/cli/larakube-linux-arm" | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build for the smoke test
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: larakube-runner:smoke
+          build-args: |
+            LARAKUBE_CLI_VERSION=${{ steps.target.outputs.cli }}
+            LARAKUBE_CLI_SHA256_AMD64=${{ steps.target.outputs.amd64 }}
+            LARAKUBE_CLI_SHA256_ARM64=${{ steps.target.outputs.arm64 }}
+
+      - name: Smoke test
+        run: scripts/smoke.sh larakube-runner:smoke
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.target.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=larakube-runner
+            org.opencontainers.image.description=Disposable job image for LaraKube Cloud
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            dev.larakube.cli.version=${{ steps.target.outputs.cli }}
+          build-args: |
+            LARAKUBE_CLI_VERSION=${{ steps.target.outputs.cli }}
+            LARAKUBE_CLI_SHA256_AMD64=${{ steps.target.outputs.amd64 }}
+            LARAKUBE_CLI_SHA256_ARM64=${{ steps.target.outputs.arm64 }}
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Summary
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          echo "Pin this in production: \`$IMAGE@$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"

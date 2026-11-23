@@ -1,0 +1,8 @@
+Host *
+    StrictHostKeyChecking accept-new
+    UserKnownHostsFile /tmp/larakube-known-hosts
+    IdentitiesOnly yes
+    IdentityAgent none
+    ForwardAgent no
+    PasswordAuthentication no
+    ConnectTimeout 15
