@@ -36,7 +36,14 @@ case "$1" in
         for arg in "$@"; do case "$arg" in --key=*) key="${arg#--key=}" ;; esac; done
         [ -f "$key" ] || exit 9
         [ -z "${LARAKUBE_CALLBACK_TOKEN:-}" ] || exit 8
-        printf 'noise\n{"success":true,"kubeconfig":"FAKE-CREDENTIAL-VALUE"}\n'
+        case " $* " in
+            *" --stack-name=no-context "*) printf '{"success":true}\n' ;;
+            *) printf 'noise\n{"success":true,"context":"example","kubeconfig":"FAKE-CREDENTIAL-VALUE"}\n' ;;
+        esac
+        ;;
+    cloud:access:connect)
+        [ "$2" = "--context=example" ] || exit 7
+        printf '{"success":true,"kubeconfig":"FAKE-CREDENTIAL-VALUE"}\n'
         ;;
     cloud:destroy) echo '{"success":false,"error":"boom"}'; exit 3 ;;
     *) exit 0 ;;
@@ -54,7 +61,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         expected = "sha256=" + hmac.new(token, stamp.encode() + b"." + body, hashlib.sha256).hexdigest()
         ok = hmac.compare_digest(expected, self.headers["X-LaraKube-Signature"])
         data = json.loads(body)
-        print(json.dumps({"ok": ok, "verb": data["verb"], "exit": data["exitCode"], "success": data["result"].get("success")}), flush=True)
+        print(json.dumps({"ok": ok, "verb": data["verb"], "exit": data["exitCode"], "success": data["result"].get("success"), "access": (data["result"].get("access") or {}).get("success")}), flush=True)
         self.send_response(204 if ok else 401)
         self.end_headers()
     def log_message(self, *args):
@@ -71,7 +78,7 @@ run() {
         --add-host callback.svc.cluster.local:host-gateway \
         -v "$work/larakube:/usr/local/bin/larakube:ro" \
         -e "LARAKUBE_CALLBACK_URL=${url:-http://callback.svc.cluster.local:$port/result}" \
-        -e "LARAKUBE_CALLBACK_TOKEN=$token" "$image" "$@"
+        -e "LARAKUBE_CALLBACK_TOKEN=$token" -e LARAKUBE_READ_ACCESS=true "$image" "$@"
 }
 expect() {
     local want="$1"; shift
@@ -84,14 +91,15 @@ expect 64 run plex:remove
 url=http://example.com/result expect 64 run cloud:destroy
 expect 0 run cloud:create --provider=gcp
 if grep -q FAKE-CREDENTIAL "$work/output"; then echo "a credential reached the pod log" >&2; exit 1; fi
+expect 0 run cloud:create --stack-name=no-context
 expect 3 run cloud:destroy
 expect 70 run cloud:access:disconnect
 
 python3 -I - "$work/received" <<'PY'
 import json, sys
 rows = [json.loads(line) for line in open(sys.argv[1])]
-want = [("cloud:create", 0, True), ("cloud:destroy", 3, False), ("cloud:access:disconnect", 70, False)]
-got = [(r["verb"], r["exit"], r["success"]) for r in rows]
+want = [("cloud:create", 0, True, True), ("cloud:create", 0, True, False), ("cloud:destroy", 3, False, None), ("cloud:access:disconnect", 70, False, None)]
+got = [(r["verb"], r["exit"], r["success"], r["access"]) for r in rows]
 assert all(r["ok"] for r in rows) and got == want, got
 PY
 

@@ -45,6 +45,23 @@ if ! tail -n 1 "$work/stdout" | jq -ce 'type == "object"' > /dev/null 2>&1; then
 fi
 tail -n 1 "$work/stdout" > "$work/result.json"
 
+# The admin kubeconfig only exists inside this job, so read access is created before it ends.
+# A failure here is reported under `access` because the server itself was still created.
+if [ "$verb" = "cloud:create" ] && [ "$exit_code" -eq 0 ] && [ "${LARAKUBE_READ_ACCESS:-}" = "true" ]; then
+    context="$(jq -r '.context // empty' "$work/result.json")"
+    printf '{"success":false,"error":"Read access could not be set up."}\n' > "$work/access.json"
+    if [ -n "$context" ]; then
+        set +e
+        larakube cloud:access:connect "--context=$context" --json --no-interaction > "$work/access.out"
+        set -e
+        if tail -n 1 "$work/access.out" | jq -ce 'type == "object"' > /dev/null 2>&1; then
+            tail -n 1 "$work/access.out" > "$work/access.json"
+        fi
+    fi
+    jq -c --slurpfile access "$work/access.json" '. + {access: $access[0]}' "$work/result.json" > "$work/merged.json"
+    mv "$work/merged.json" "$work/result.json"
+fi
+
 jq -cn --arg verb "$verb" --argjson exitCode "$exit_code" --slurpfile result "$work/result.json" \
     '{verb: $verb, exitCode: $exitCode, result: $result[0]}' > "$work/body.json"
 
