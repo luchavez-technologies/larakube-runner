@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1.7
+#
+# A LOCAL-ONLY runner that runs the LaraKube CLI from a source checkout instead of the packaged
+# binary, so it can trust a development template-signing key. Never push this image: a packaged
+# CLI ignores development keys on purpose, and this image exists to bypass that for local testing.
+#
+# Build (the CLI checkout is passed as a named build context):
+#   docker build -f Dockerfile.dev --build-context cli=/path/to/larakube-cli -t larakube-runner:dev .
+
+ARG RUNNER_BASE=ghcr.io/luchavez-technologies/larakube-runner:canary
+FROM ${RUNNER_BASE} AS runner
+
+FROM php:8.5-cli-trixie
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl jq openssh-client openssl libicu-dev libzip-dev; \
+    docker-php-ext-install -j"$(nproc)" intl bcmath zip pcntl; \
+    apt-get purge -y libicu-dev libzip-dev; apt-get install -y --no-install-recommends libicu76 libzip5; \
+    apt-get autoremove -y; rm -rf /var/lib/apt/lists/*; \
+    useradd --uid 10001 --create-home --home-dir /home/runner --shell /usr/sbin/nologin runner
+
+# The same tools, SSH settings and entrypoint as the released runner.
+COPY --from=runner /usr/local/bin/tofu /usr/local/bin/kubectl /usr/local/bin/larakube-runner /usr/local/bin/
+COPY --from=runner /etc/ssh/ssh_config.d/larakube.conf /etc/ssh/ssh_config.d/larakube.conf
+
+# Only what the CLI needs at runtime from the checkout.
+COPY --from=cli larakube composer.json /opt/larakube-cli/
+COPY --from=cli app /opt/larakube-cli/app
+COPY --from=cli bootstrap /opt/larakube-cli/bootstrap
+COPY --from=cli config /opt/larakube-cli/config
+COPY --from=cli resources /opt/larakube-cli/resources
+COPY --from=cli vendor /opt/larakube-cli/vendor
+
+RUN printf '#!/bin/sh\nexec php /opt/larakube-cli/larakube "$@"\n' > /usr/local/bin/larakube \
+    && chmod 0755 /usr/local/bin/larakube \
+    && rm -rf /opt/larakube-cli/bootstrap/cache/*.php
+
+USER 10001:10001
+WORKDIR /home/runner
+# The root filesystem is read-only in a Job, so every cache the CLI writes goes to /tmp.
+ENV HOME=/home/runner HISTFILE=/dev/null TF_IN_AUTOMATION=1 TF_INPUT=0 \
+    APP_ENV=development \
+    LARAVEL_STORAGE_PATH=/tmp/larakube-storage \
+    VIEW_COMPILED_PATH=/tmp/larakube-views \
+    APP_CONFIG_CACHE=/tmp/larakube-cache/config.php \
+    APP_SERVICES_CACHE=/tmp/larakube-cache/services.php \
+    APP_PACKAGES_CACHE=/tmp/larakube-cache/packages.php \
+    APP_ROUTES_CACHE=/tmp/larakube-cache/routes.php \
+    APP_EVENTS_CACHE=/tmp/larakube-cache/events.php
+ENTRYPOINT ["/usr/local/bin/larakube-runner"]
