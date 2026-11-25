@@ -20,9 +20,11 @@ RUN set -eux; \
     apt-get autoremove -y; rm -rf /var/lib/apt/lists/*; \
     useradd --uid 10001 --create-home --home-dir /home/runner --shell /usr/sbin/nologin runner
 
-# The same tools, SSH settings and entrypoint as the released runner.
-COPY --from=runner /usr/local/bin/tofu /usr/local/bin/kubectl /usr/local/bin/larakube-runner /usr/local/bin/
+# The same tools and SSH settings as the released runner, with this checkout's entrypoint so a
+# change to its allow-list can be tested before it is released.
+COPY --from=runner /usr/local/bin/tofu /usr/local/bin/kubectl /usr/local/bin/
 COPY --from=runner /etc/ssh/ssh_config.d/larakube.conf /etc/ssh/ssh_config.d/larakube.conf
+COPY --chmod=0755 entrypoint.sh /usr/local/bin/larakube-runner
 
 # Only what the CLI needs at runtime from the checkout.
 COPY --from=cli larakube composer.json /opt/larakube-cli/
