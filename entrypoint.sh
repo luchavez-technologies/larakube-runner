@@ -10,7 +10,7 @@ verb="${1:-}"
 [ "$#" -gt 0 ] && shift
 
 case "$verb" in
-    cloud:create | cloud:destroy | cloud:ssh-keys:sync | cloud:access:connect | cloud:access:disconnect | cloud:apps:install) ;;
+    cloud:create | cloud:destroy | cloud:ssh-keys:sync | cloud:access:connect | cloud:access:disconnect | cloud:apps:install | cloud:apps:remove) ;;
     *) fail "verb not allowed: ${verb:-none}" ;;
 esac
 
