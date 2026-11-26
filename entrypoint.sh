@@ -29,6 +29,11 @@ work="$(mktemp -d /tmp/larakube-job.XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 cd "$work"
 
+# The LaraKube CLI's global email, as Desktop sets it: Traefik's Let's Encrypt account on a new server.
+if [ -n "${LARAKUBE_ADMIN_EMAIL:-}" ]; then
+    larakube config "--email=$LARAKUBE_ADMIN_EMAIL" > /dev/null 2>&1 || fail "the admin email could not be saved"
+fi
+
 if [ "$verb" = "cloud:create" ]; then
     ssh-keygen -q -t ed25519 -N '' -C larakube-provisioning -f "$work/provisioning"
     set -- "$@" "--key=$work/provisioning"
