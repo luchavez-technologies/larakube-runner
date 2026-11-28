@@ -10,7 +10,7 @@ verb="${1:-}"
 [ "$#" -gt 0 ] && shift
 
 case "$verb" in
-    cloud:create | cloud:destroy | cloud:ssh-keys:sync | cloud:access:connect | cloud:access:disconnect | cloud:apps:install | cloud:apps:remove) ;;
+    cloud:create | cloud:init | cloud:destroy | cloud:ssh-keys:sync | cloud:access:connect | cloud:access:disconnect | cloud:apps:install | cloud:apps:remove) ;;
     *) fail "verb not allowed: ${verb:-none}" ;;
 esac
 
@@ -39,6 +39,24 @@ if [ "$verb" = "cloud:create" ]; then
     set -- "$@" "--key=$work/provisioning"
 fi
 
+# An existing server: LaraKube Cloud hands over a one-off key in the job's files Secret, mounted
+# group-readable. ssh refuses a key others can read, so it is copied here, readable by this user only.
+if [ "$verb" = "cloud:init" ]; then
+    args=()
+    for arg in "$@"; do
+        case "$arg" in
+            --ssh-key=*)
+                src="${arg#--ssh-key=}"
+                [ -f "$src" ] || fail "the SSH key for the existing server is missing"
+                install -m 600 "$src" "$work/existing-server"
+                args+=("--ssh-key=$work/existing-server")
+                ;;
+            *) args+=("$arg") ;;
+        esac
+    done
+    set -- "${args[@]}"
+fi
+
 set +e
 larakube "$verb" "$@" --json --no-interaction > "$work/stdout"
 exit_code=$?
@@ -52,7 +70,7 @@ tail -n 1 "$work/stdout" > "$work/result.json"
 
 # The admin kubeconfig only exists inside this job, so read access is created before it ends.
 # A failure here is reported under `access` because the server itself was still created.
-if [ "$verb" = "cloud:create" ] && [ "$exit_code" -eq 0 ] && [ "${LARAKUBE_READ_ACCESS:-}" = "true" ]; then
+if { [ "$verb" = "cloud:create" ] || [ "$verb" = "cloud:init" ]; } && [ "$exit_code" -eq 0 ] && [ "${LARAKUBE_READ_ACCESS:-}" = "true" ]; then
     context="$(jq -r '.context // empty' "$work/result.json")"
     printf '{"success":false,"error":"Read access could not be set up."}\n' > "$work/access.json"
     if [ -n "$context" ]; then
