@@ -46,7 +46,7 @@ build() {
         tag="larakube-runner:dev-no-${without//,/-}"
     fi
 
-    (cd "$cli" && rsync -a "${excludes[@]}" larakube composer.json app bootstrap config resources vendor "$copy/")
+    (cd "$cli" && rsync -a ${excludes[@]+"${excludes[@]}"} larakube composer.json app bootstrap config resources vendor "$copy/")
     docker build -f "$here/Dockerfile.dev" --build-context "cli=$copy" -t "$tag" "$here"
     echo "Built $tag"
 }
