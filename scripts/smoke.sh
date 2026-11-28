@@ -104,7 +104,9 @@ expect 3 run cloud:destroy
 expect 70 run cloud:access:disconnect
 # An existing server: the key arrives group-readable in /secrets and must reach ssh as 600, outside /secrets.
 printf 'fake-private-key\n' > "$work/existing.key"
-chmod 440 "$work/existing.key"
+# A fake key. A real Job reads /secrets through the pod's fsGroup; here the container runs as
+# uid 10001, which neither owns the file nor shares its group on a Linux CI host, so allow reading.
+chmod 444 "$work/existing.key"
 run_with_key() {
     docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges \
         --tmpfs /tmp:mode=1777 --tmpfs /home/runner:uid=10001,gid=10001,mode=700 \
